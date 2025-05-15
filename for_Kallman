@@ -1,0 +1,88 @@
+#include <Wire.h> 
+#include <LiquidCrystal_I2C.h>
+
+LiquidCrystal_I2C lcd(0x27, 20, 4);
+
+const int isensor = 7;
+const int BUFFER_SIZE = 100; // Новый размер буфера
+
+struct MeasurementData {
+    long diffBuffer[BUFFER_SIZE];    // Буфер разниц между интервалами
+    int writeIndex = 0;              // Текущая позиция записи
+    bool bufferFull = false;         // Флаг заполненности буфера
+    unsigned long prevInterval = 0;  // Предыдущий интервал
+} measurementData;
+
+unsigned long lastRisingEdge = 0;
+bool lastState = false;
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(isensor, INPUT);
+  
+  lcd.init();
+  lcd.backlight();
+  lcd.print("Delta buffer:");
+}
+
+void handleSensorEvent(unsigned long currentInterval) {
+  static bool firstMeasurement = true;
+  if (firstMeasurement) {
+    measurementData.prevInterval = currentInterval;
+    firstMeasurement = false;
+    return;
+  }
+
+  long delta = currentInterval - measurementData.prevInterval;
+  measurementData.prevInterval = currentInterval;
+
+  measurementData.diffBuffer[measurementData.writeIndex] = delta;
+  measurementData.writeIndex = (measurementData.writeIndex + 1) % BUFFER_SIZE;
+  
+  if (!measurementData.bufferFull && measurementData.writeIndex == 0) {
+    measurementData.bufferFull = true;
+  }
+}
+
+void loop() {
+  bool currentState = digitalRead(isensor);
+
+  if (currentState && !lastState) {
+    unsigned long currentTime = micros();
+    if (lastRisingEdge != 0) {
+      unsigned long interval = currentTime - lastRisingEdge;
+      handleSensorEvent(interval);
+    }
+    lastRisingEdge = currentTime;
+  }
+  lastState = currentState;
+
+  static unsigned long lastUpdate = 0;
+  if (micros() - lastUpdate >= 250000) {
+    Serial.println("Delta Buffer Contents:");
+    
+    int elementsToShow = measurementData.bufferFull ? BUFFER_SIZE : measurementData.writeIndex;
+    
+    for(int i = 0; i < elementsToShow; i++) {
+      int idx = (measurementData.writeIndex + i) % BUFFER_SIZE;
+      
+      Serial.print("[");
+      Serial.print(idx);
+      Serial.print("]: ");
+      Serial.print(measurementData.diffBuffer[idx]);
+      Serial.println(" μs");
+
+      if(i < 4) {
+        lcd.setCursor(0, (i % 4)); 
+        lcd.print("        ");
+        lcd.setCursor(0, (i % 4));
+        lcd.print(idx);
+        lcd.print(":");
+        lcd.print(measurementData.diffBuffer[idx]);
+      }
+    }
+    
+    Serial.println("-------------------");
+    lastUpdate = micros();
+  }
+}
