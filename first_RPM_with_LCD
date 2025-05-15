@@ -1,0 +1,64 @@
+#include <Wire.h> 
+#include <LiquidCrystal_I2C.h>
+
+LiquidCrystal_I2C lcd(0x27, 16, 2); // Адрес I2C: 0x27, 16x2
+
+const int isensor = 7;
+unsigned long lastRisingEdge = 0;
+unsigned long pulsePeriod = 0;
+bool lastState = false;
+bool newMeasurement = false;
+const unsigned long measurementTimeout = 2000000;
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(isensor, INPUT); 
+  
+  
+  lcd.init();
+  lcd.backlight();
+  lcd.print("RPM Monitor:");
+}
+
+void loop() {
+  bool currentState = !digitalRead(isensor); 
+  
+  
+  if(currentState && !lastState) {
+    if(lastRisingEdge != 0) {
+      pulsePeriod = micros() - lastRisingEdge;
+      newMeasurement = true;
+    }
+    lastRisingEdge = micros();
+  }
+  
+  lastState = currentState;
+
+  
+  static unsigned long lastUpdate = 0;
+  if(micros() - lastUpdate >= 250000) {
+    float rpm = 0.0;
+    
+    if(newMeasurement) {
+      rpm = 60000000.0 / pulsePeriod; 
+      newMeasurement = false;
+    }
+    
+    
+    if(micros() - lastRisingEdge > measurementTimeout) {
+      rpm = 0.0;
+      lastRisingEdge = 0;
+    }
+
+    
+    lcd.setCursor(0, 1);
+    lcd.print(rpm, 1); 
+    lcd.print(" RPM   "); 
+
+    
+    Serial.print("RPM: ");
+    Serial.println(rpm, 1);
+
+    lastUpdate = micros();
+  }
+}
