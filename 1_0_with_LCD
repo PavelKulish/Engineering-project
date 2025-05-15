@@ -1,0 +1,25 @@
+#include <Wire.h> 
+#include <LiquidCrystal_I2C.h>
+
+LiquidCrystal_I2C lcd(0x27, 16, 2); // Адрес I2C: 0x27, 16x2
+const int isensor = 7;
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(isensor, INPUT);
+  
+  lcd.init();
+  lcd.backlight();
+  lcd.print("Sensor status:"); // Статический текст
+}
+
+void loop() {
+  bool sensorState = digitalRead(isensor);
+  Serial.println(sensorState);
+  
+  lcd.setCursor(0, 1);          
+  lcd.print("State: ");       
+  lcd.print(sensorState ? "ON " : "OFF"); 
+  
+  //delay(200); 
+}
