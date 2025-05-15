@@ -1,0 +1,81 @@
+#include <Wire.h> 
+#include <LiquidCrystal_I2C.h>
+
+LiquidCrystal_I2C lcd(0x27, 20, 4); // Адрес I2C: 0x27, 20x4
+
+const int isensor = 7;
+unsigned long lastRisingEdge = 0;
+unsigned long pulsePeriod = 0;
+bool lastState = false;
+bool newMeasurement = false;
+const unsigned long measurementTimeout = 2000000; // 2 секунды в микросекундах
+const float timeError = 8.0; // Погрешность времени ±4 мкс на фронт (суммарно 8 мкс)
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(isensor, INPUT);
+
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("RPM:");
+  lcd.setCursor(0, 1);
+  lcd.print("Error:");
+}
+
+// Функция расчета погрешности RPM
+float calculateError(float rpm, unsigned long period) {
+  if (period == 0 || rpm < 1.0) return 0.0;
+  float error = (timeError / period) * rpm; // ΔRPM = (Δt / T) * RPM
+  return error;
+}
+
+void loop() {
+  bool currentState = digitalRead(isensor);
+  //Serial.print("Raw sensor: ");
+  //Serial.println(currentState);
+  
+  if (currentState && !lastState) {
+    if (lastRisingEdge != 0) {
+      pulsePeriod = micros() - lastRisingEdge;
+      newMeasurement = true;
+    }
+    lastRisingEdge = micros();
+  }
+  lastState = currentState;
+
+  static unsigned long lastUpdate = 0;
+  if (micros() - lastUpdate >= 250000) {
+    float rpm = 0.0;
+    float error = 0.0;
+    
+    if (newMeasurement) {
+      rpm = 60000000.0 / pulsePeriod;
+      error = calculateError(rpm, pulsePeriod);
+      newMeasurement = false;
+    }
+
+    if (micros() - lastRisingEdge > measurementTimeout) {
+      rpm = 0.0;
+      error = 0.0;
+      lastRisingEdge = 0;
+    }
+
+    lcd.setCursor(5, 0);
+    lcd.print(rpm, 1);
+    lcd.print(" RPM   ");
+    
+    lcd.setCursor(6, 1);
+    //lcd.print("±");
+    lcd.print(error, 1);
+    lcd.print(" RPM   ");
+
+    Serial.print("RPM: ");
+    Serial.print(rpm, 1);
+    Serial.print(" ±");
+    Serial.print(error, 1);
+    Serial.println(" RPM");
+
+    lastUpdate = micros();
+  }
+}
