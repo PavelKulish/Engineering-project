@@ -1,0 +1,125 @@
+#include <SPI.h>
+#include <SD.h>
+
+const int chipSelect = 4; // Пин CS SD-модуля
+const uint32_t TEST_FILE_SIZE = 100000;
+
+void setup() {
+  Serial.begin(9600);
+  while (!Serial);
+
+  Serial.println(F("\n=== SD Card Tester ==="));
+  
+  // Инициализация SD-карты
+  if (!SD.begin(chipSelect)) {
+    Serial.println(F("Ошибка инициализации SD-карты!"));
+    Serial.println(F("Проверьте:"));
+    Serial.println(F("1. Правильность подключения"));
+    Serial.println(F("2. Форматирование карты (FAT32)"));
+    Serial.println(F("3. Наличие карты в слоте"));
+    return;
+  }
+  Serial.println(F("SD-карта инициализирована успешно"));
+
+  // Запуск тестов
+  testWriteSpeed();
+  testReadSpeed();
+  testDataIntegrity();
+}
+
+void loop() {}
+
+void testWriteSpeed() {
+  File testFile = SD.open("test.bin", FILE_WRITE);
+  if (!testFile) {
+    Serial.println(F("Ошибка создания файла!"));
+    return;
+  }
+
+  uint8_t buffer[512]; // Тестовый буфер
+  memset(buffer, 0xAA, sizeof(buffer)); 
+
+  uint32_t startTime = micros();
+  uint32_t totalWritten = 0;
+
+  while(totalWritten < TEST_FILE_SIZE) {
+    testFile.write(buffer, sizeof(buffer));
+    totalWritten += sizeof(buffer);
+  }
+  
+  testFile.close();
+  uint32_t elapsed = micros() - startTime;
+
+  Serial.println(F("\n=== Тест записи ==="));
+  Serial.print(F("Записано: ")); Serial.print(totalWritten); Serial.println(F(" байт"));
+  Serial.print(F("Время: ")); Serial.print(elapsed / 1000.0); Serial.println(F(" мс"));
+  Serial.print(F("Скорость: ")); 
+  Serial.print((totalWritten * 1000.0) / (elapsed / 1000.0)); 
+  Serial.println(F(" байт/сек"));
+}
+
+void testReadSpeed() {
+  File testFile = SD.open("test.bin");
+  if (!testFile) {
+    Serial.println(F("Ошибка открытия файла!"));
+    return;
+  }
+
+  uint8_t buffer[512];
+  uint32_t startTime = micros();
+  uint32_t totalRead = 0;
+
+  while(testFile.available()) {
+    int bytesRead = testFile.read(buffer, sizeof(buffer));
+    totalRead += bytesRead;
+  }
+  
+  testFile.close();
+  uint32_t elapsed = micros() - startTime;
+
+  Serial.println(F("\n=== Тест чтения ==="));
+  Serial.print(F("Прочитано: ")); Serial.print(totalRead); Serial.println(F(" байт"));
+  Serial.print(F("Время: ")); Serial.print(elapsed / 1000.0); Serial.println(F(" мс"));
+  Serial.print(F("Скорость: ")); 
+  Serial.print((totalRead * 1000.0) / (elapsed / 1000.0)); 
+  Serial.println(F(" байт/сек"));
+}
+
+void testDataIntegrity() {
+  File testFile = SD.open("test.bin");
+  if (!testFile) {
+    Serial.println(F("Ошибка открытия файла для проверки!"));
+    return;
+  }
+
+  uint8_t buffer[512];
+  uint32_t errors = 0;
+  uint32_t totalChecked = 0;
+
+  Serial.println(F("\n=== Проверка целостности ==="));
+
+  while(testFile.available()) {
+    int bytesRead = testFile.read(buffer, sizeof(buffer));
+    totalChecked += bytesRead;
+    
+    for(int i = 0; i < bytesRead; i++) {
+      if(buffer[i] != 0xAA) {
+        errors++;
+        if(errors < 10) { // Вывод первых 10 ошибок
+          Serial.print(F("Ошибка по адресу: 0x"));
+          Serial.print(totalChecked - bytesRead + i, HEX);
+          Serial.print(F(" Получено: 0x")); 
+          Serial.println(buffer[i], HEX);
+        }
+      }
+    }
+  }
+  
+  testFile.close();
+
+  Serial.print(F("Проверено: ")); Serial.print(totalChecked); Serial.println(F(" байт"));
+  Serial.print(F("Ошибок: ")); Serial.println(errors);
+  Serial.print(F("Процент ошибок: "));
+  Serial.print((errors * 100.0) / totalChecked, 2);
+  Serial.println(F(" %"));
+}
