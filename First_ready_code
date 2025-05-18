@@ -1,0 +1,141 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+
+
+// ВВОД ПАРАМЕТРОВ СИСТЕМЫ
+LiquidCrystal_I2C lcd(0x27, 20, 4); //  // Адрес I2C для LCD-экрана: 0x27, 16x2
+const int SENSOR_PIN = 2; // Пин сенсора (OPB742) на Arduino
+
+// Временные константы
+const unsigned long DEBOUNCE_TIME = 2500; // / Время антидребезга (2.5 мс) - защита от дребезга и случайных срабатываний
+const unsigned long MEASUREMENT_TIMEOUT = 2000000; // время сброса измерений (если не фиксируются новые знаяения - измерения сбрасываются в 0)
+
+// Временные флаги
+volatile unsigned long lastRisingEdge = 0; // Время последней пачки сигнала с датчика
+volatile unsigned long rawPeriod = 0; // "Сырой" период между импульсами
+volatile bool newDataAvailable = false; // флаг поступления новых данных
+volatile bool timeoutFlag = false;  // Флаг таймаута
+
+// Переменные, задающие работу фильтра скользящего среднего
+const int FILTER_SIZE = 7; // размер фильтра
+unsigned long periodBuffer[FILTER_SIZE] = {0}; // Буфер для хранения последних значений
+byte bufferIndex = 0; // Текущая позиция в буфере
+unsigned long sum = 0; // Аккумулятор суммы значений
+bool bufferFilled = false; // Флаг полного заполнения буфера
+
+
+const float HARDWARE_ERROR = 1.2; // систематическая погрешность аппаратной части системы (в мкс), 1 мкс от Arduino, 0.2 - от OPB742
+
+// Функция настройки аппаратной части
+void setup() {
+  Serial.begin(115200); // Задание baudrate порта общения с платой
+  pinMode(SENSOR_PIN, INPUT); 
+  attachInterrupt(digitalPinToInterrupt(SENSOR_PIN), isr, RISING); // Включаем прерывания (!ДОСТУПНЫ ТОЛЬКО НА 2 и 3 ПИНЕ!)
+  
+  // Включение и первичная настройка экрана
+  lcd.init();
+  lcd.backlight();
+  lcd.print("RPM: ");
+  lcd.setCursor(0, 1);
+  lcd.print("Error: ");
+}
+
+//Функция прерываний. Алгоритм работы: 
+//Вызывается при обнаружении фронта сигнала на пине SENSOR_PIN.
+//Рассчитывает период между импульсами с защитой от дребезга (DEBOUNCE_TIME).
+//Устанавливает флаг newDataAvailable и сбрасывает таймаут.
+void isr() {
+  static unsigned long lastInterrupt = 0;
+  unsigned long now = micros();
+  
+  if (now - lastInterrupt > DEBOUNCE_TIME) {
+    if (lastRisingEdge != 0) {
+      rawPeriod = (now - lastRisingEdge) & 0x7FFFFFFF;
+    }
+    lastRisingEdge = now;
+    newDataAvailable = true;
+    timeoutFlag = false;  // Сброс флага таймаута
+    lastInterrupt = now;
+  }
+}
+
+// Реализация фильтра скользящего среднего
+unsigned long movingAverageFilter(unsigned long newVal) {
+  sum -= periodBuffer[bufferIndex];
+  periodBuffer[bufferIndex] = newVal;
+  sum += newVal;
+  // Обновляем индекс с зацикливанием
+  bufferIndex = (bufferIndex + 1) % FILTER_SIZE;
+  if(!bufferFilled && bufferIndex == 0) bufferFilled = true;
+  // Возвращаем среднее значение (для неполного буфера делим на текущее количество элементов)
+  return bufferFilled ? (sum / FILTER_SIZE) : (sum / bufferIndex);
+}
+
+// Функция расчёта ошибки
+float calculateError(unsigned long period) {
+  if(period < 50 || period > 2000000) return 0.0;
+  
+  const float deltaT = HARDWARE_ERROR + (DEBOUNCE_TIME/1000.0);
+  return (deltaT * 60000000.0) / (period * period); 
+}
+
+void loop() {
+  // Промежуточные переменные
+  static unsigned long lastUpdate = 0;
+  static float lastRPM = 0;
+  static float lastError = 0;
+
+  // Проверка таймаута с учетом переполнения micros()
+  unsigned long currentMicros = micros();
+  bool timeoutCondition = (currentMicros - lastRisingEdge > MEASUREMENT_TIMEOUT) && 
+                         (currentMicros >= lastRisingEdge);
+
+  if(timeoutCondition && !timeoutFlag) {
+    timeoutFlag = true;
+    lastRPM = 0;
+    lastError = 0;
+  }
+  // Проверка дачтика
+  if(newDataAvailable || timeoutFlag) {
+    noInterrupts();
+    unsigned long currentPeriod = rawPeriod;
+    bool localTimeout = timeoutFlag;
+    newDataAvailable = false;
+    interrupts();
+
+    if(localTimeout) {
+      lcd.setCursor(5, 0);
+      lcd.print("0.0  ");
+      lcd.setCursor(7, 1);
+      lcd.print("0.0  ");
+      timeoutFlag = false;
+    }
+    else { // Расчёт RPM
+      unsigned long filteredPeriod = movingAverageFilter(currentPeriod);
+      
+      if(filteredPeriod > 50 && filteredPeriod < 2000000) {
+        lastRPM = 60000000.0 / filteredPeriod;
+        lastError = calculateError(filteredPeriod);
+      }
+      
+      // Обновление дисплея
+      lcd.setCursor(5, 0);
+      lcd.print(lastRPM, 1); 
+      lcd.print("  ");
+      
+      lcd.setCursor(7, 1);
+      lcd.print(lastError, 1);
+      lcd.print("  ");
+    }
+
+    // Вывод в Serial
+    if(millis() - lastUpdate > 250) {
+      Serial.print(lastRPM, 1);
+      Serial.print(" ±");
+      Serial.print(lastError, 1);
+      Serial.println(" RPM");
+      lastUpdate = millis();
+    }
+  }
+}
